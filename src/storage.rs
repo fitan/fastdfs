@@ -1,6 +1,7 @@
 use core::slice::SlicePattern;
 use std::collections::HashMap;
-use std::io::{Bytes, Write};
+use std::fs::File;
+use std::io::{Bytes, Read, Write};
 use std::path::Path;
 use std::str::pattern::Pattern;
 use anyhow::Context;
@@ -46,6 +47,32 @@ struct RootDir {
     dir: String,
     // 读写权限
     read_write: bool,
+    // 最大磁盘大小
+    max_disk_size: u64,
+    // 当前目录大小
+    dir_size: Mutex<u64>,
+    // 当前目录大小统计文件
+    current_dir_size_file: Mutex<File>,
+}
+
+impl RootDir {
+    pub fn new(name: String, dir: String, read_write: bool,max_disk_size: u64) -> RootDir {
+        let current_dir_size_file_path= format!("{}/current_dir_size.txt", dir);
+        let current_dir_size_file = std::fs::OpenOptions::new().write(true).create(true).open(&current_dir_size_file_path).context("open").unwrap();
+        current_dir_size_file.read
+
+
+        RootDir {
+            name,
+            dir,
+            read_write,
+            max_disk_size,
+            Mutex::new(dir_size),
+            current_dir_size_file,
+        }
+    }
+
+
 }
 
 impl Storage {
@@ -58,16 +85,17 @@ impl Storage {
         }
     }
 
-    pub async fn get_file(&self, name: &String) -> anyhow::Result<&[u8]> {
+    pub async fn get_file(&self, name: &String) -> anyhow::Result<Vec<u8>> {
         let real_file = self.decode_file_name_to_real_file_name(name)?;
-        let
-        tokio::fs::read(&real_file).ret
+        let mut data = vec![];
+        tokio::fs::read(&real_file).read_to_end(&mut data)?;
+        Ok(data)
     }
 
     pub fn decode_file_name_to_real_file_name(&self, name: &String) -> anyhow::Result<String> {
-        let (_, dir_name, sub_dir, sud_idr, id, file_ext_name) = decode_file_name(name)?;
+        let (_, dir_name, sub_dir_name0, sud_dir_name1, id, file_ext_name) = decode_file_name(name)?;
         let root_path = self.root_dirs_map.get(&dir_name).context("not found root_path")?;
-        Ok(format!("{}/{}/{}/{}.{}", root_path.dir, sub_dir, sud_idr, id, file_ext_name))
+        Ok(format!("{}/{}/{}/{}.{}", root_path.dir, sub_dir_name0, sud_dir_name1, id, file_ext_name))
     }
 
 
@@ -103,20 +131,7 @@ impl Storage {
 
     // 轮训获取根目录
     pub fn get_root_dir(&self) -> anyhow::Result<RootDir> {
-        let mut index = 0;
-        let mut root_dir: Option<RootDir> = None;
-        for i in 0..self.root_dirs.len() {
-            if self.root_dirs[i].read_write {
-                index = i;
-                root_dir = Some(self.root_dirs[i]);
-                break;
-            }
-        }
-        return if let Some(v) = root_dir {
-            Ok(v)
-        } else {
-            Err(anyhow::anyhow!("no root dir"))
-        }
+        self.rrw_root_dirs.lock().next().context("not found root_dir")?
     }
 
 
@@ -171,8 +186,8 @@ fn decode_file_id(s: &String) -> anyhow::Result<(String,u64, u64, u32, u32)> {
 }
 
 // 文件名生成:  组名_存储目录名字_子目录名字0_自目录名字1_文件id_文件后缀
-fn gen_file_name(group_name: &String, dir_name: &String, sub_dir_name0: &String, sub_dir_name1: &String, file_id: &String, file_ext_name: &String) -> anyhow::Result<String> {
-    let file_name = format!("{}/{}/{}/{}/{}/{}", group_name, dir_name, sub_dir_name0, sub_dir_name1, file_id, file_ext_name);
+fn gen_file_name(group_name: &String, dir_name: &String, sub_dir_name: &String, file_id: &String, file_ext_name: &String) -> anyhow::Result<String> {
+    let file_name = format!("{}/{}/{}/{}/{}/{}", group_name, dir_name, sub_dir_name,sub_dir_name,  file_id, file_ext_name);
     Ok(file_name)
 }
 
@@ -189,4 +204,41 @@ fn decode_file_name(file_name: &String) -> anyhow::Result<(String, String, Strin
     let file_id = v[4].to_string();
     let file_ext_name = v[5].to_string();
     Ok((group_name, dir_name, sub_dir_name0, sub_dir_name1, file_id, file_ext_name))
+}
+
+
+struct FileMsg {
+    group_name: String,
+    dir_name: String,
+    sub_dir_name: String,
+    file_id: FileId,
+    file_ext: String
+}
+
+struct FileId {
+    ip: String,
+    timestamp: u64,
+    size: u64,
+    crc32: u32,
+}
+
+impl FileMsg {
+    pub fn new(file_name: &String) -> anyhow::Result<FileMsg> {
+        let (group_name, dir_name, sub_dir_name0, sub_dir_name1, file_id, file_ext_name) = decode_file_name(file_name)?;
+        let (ip,timestamp, size, crc32, rand) = decode_file_id(&file_id)?;
+        let file_id = FileId {
+            ip,
+            timestamp,
+            size,
+            crc32,
+        };
+        let file_msg = FileMsg {
+            group_name,
+            dir_name,
+            sub_dir_name: format!("{}/{}", sub_dir_name0, sub_dir_name1),
+            file_id,
+            file_ext: file_ext_name,
+        };
+        Ok(file_msg)
+    }
 }
