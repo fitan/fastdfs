@@ -1,5 +1,5 @@
 // 加权轮询算法
-pub struct WeightedRoundRobin {
+pub struct WeightedRoundRobin<T: Weight> {
     // 当前权重
     current_weight: usize,
     // 最大权重
@@ -9,18 +9,15 @@ pub struct WeightedRoundRobin {
     // 当前下标
     current_index: usize,
     // 服务列表
-    servers: Vec<Server>,
+    servers: Vec<T>,
 }
 
-pub struct Server {
-    // 服务地址
-    addr: String,
-    // 权重
-    weight: usize,
+pub trait Weight {
+    fn weight(&self) -> usize;
 }
 
-impl WeightedRoundRobin {
-    pub fn new(servers: Vec<Server>) -> WeightedRoundRobin {
+impl<T: Weight> WeightedRoundRobin<T> {
+    pub fn new(servers: Vec<T>) -> WeightedRoundRobin<T> {
         let mut max_weight = 0;
         let mut gcd_weight = 0;
         for server in &servers {
@@ -38,7 +35,7 @@ impl WeightedRoundRobin {
         }
     }
 
-    pub fn next(&mut self) -> String {
+    pub fn next(&mut self) -> Option<T> {
         loop {
             self.current_index = (self.current_index + 1) % self.servers.len();
             if self.current_index == 0 {
@@ -46,12 +43,12 @@ impl WeightedRoundRobin {
                 if self.current_weight <= 0 {
                     self.current_weight = self.max_weight;
                     if self.current_weight == 0 {
-                        return String::new();
+                        return None
                     }
                 }
             }
             if self.servers[self.current_index].weight >= self.current_weight {
-                return self.servers[self.current_index].addr.clone();
+                return Some(self.servers[self.current_index])
             }
         }
     }

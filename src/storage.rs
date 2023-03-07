@@ -1,9 +1,7 @@
-use core::slice::SlicePattern;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Bytes, Read, Write};
 use std::path::Path;
-use std::str::pattern::Pattern;
 use anyhow::Context;
 use std::time::{SystemTime, UNIX_EPOCH};
 use axum::extract::Multipart;
@@ -12,7 +10,8 @@ use crc32fast::Hasher;
 use hex::ToHex;
 use tokio::io::split;
 use tokio::sync::Mutex;
-use crate::wrr::WeightedRoundRobin;
+use crate::wrr::{Weight, WeightedRoundRobin};
+use crate::next_file::NextFile;
 
 
 pub struct Storage {
@@ -33,7 +32,7 @@ pub struct Storage {
     tmp_dir: String,
 
     // 权重获取根目录
-    rrw_root_dirs: Mutex<WeightedRoundRobin>,
+    rrw_root_dirs: Mutex<WeightedRoundRobin<RootDir>>,
 
     // hasher
     hasher: Mutex<Hasher>,
@@ -52,44 +51,40 @@ struct RootDir {
     // 当前目录大小
     dir_size: Mutex<u64>,
     // 当前目录大小统计文件
-    current_dir_size_file: Mutex<File>,
+    next_file: NextFile,
+    // 权重大小
+    weight: usize,
+}
+
+impl Weight for RootDir {
+    fn weight(&self) -> usize {
+        self.weight
+    }
 }
 
 impl RootDir {
-    pub fn new(name: String, dir: String, read_write: bool,max_disk_size: u64) -> RootDir {
+    pub fn new(name: String, dir: String, read_write: bool,max_disk_size: u64) -> anyhow::Result<RootDir> {
         let current_dir_size_file_path= format!("{}/current_dir_size.txt", dir);
-        let current_dir_size_file = std::fs::OpenOptions::new().write(true).create(true).open(&current_dir_size_file_path).context("open").unwrap();
-        current_dir_size_file.read
-
-
-        RootDir {
+        let next_file = NextFile::new(&current_dir_size_file_path).context("NextFile::new")?;
+        Ok(RootDir {
             name,
             dir,
             read_write,
             max_disk_size,
-            Mutex::new(dir_size),
-            current_dir_size_file,
-        }
+            dir_size: Mutex::new(0),
+            next_file,
+            weight: 1
+        })
     }
 
 
 }
 
 impl Storage {
-    pub fn new(dir: String) -> Storage {
-        Storage {
-            level: 2,
-            root_dirs: vec![],
-            tmp_dir: "/tmp".to_string(),
-            rrw_root_dirs: ,
-        }
-    }
 
     pub async fn get_file(&self, name: &String) -> anyhow::Result<Vec<u8>> {
         let real_file = self.decode_file_name_to_real_file_name(name)?;
-        let mut data = vec![];
-        tokio::fs::read(&real_file).read_to_end(&mut data)?;
-        Ok(data)
+        Ok(tokio::fs::read(&real_file).await.context("read")?)
     }
 
     pub fn decode_file_name_to_real_file_name(&self, name: &String) -> anyhow::Result<String> {
@@ -111,10 +106,10 @@ impl Storage {
             let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
             let id = gen_file_id(&self.local_ip, timestamp.to_owned(), data.len() as u64, gen_file_crc32(&data)?).context("gen file id")?;
-            let root_dir = self.get_root_dir()?;
+            let root_dir = self.get_root_dir().await?;
             let crc = gen_file_crc32(&data)?;
             let sub_dir = inset_dir_by_key(crc)?;
-            let new_file_name = gen_file_name(&self.group_name, &root_dir.name, &sub_dir.to_string(), &sub_dir.to_string(), &id, &suffix_name)?;
+            let new_file_name = gen_file_name(&self.group_name, &root_dir.name, &sub_dir.to_string(), &sub_dir.to_string(), &id)?;
             let real_file_name = format!("{}/{}/{}/{}.{}", &root_dir.dir, &sub_dir, &sub_dir, &id, &suffix_name);
 
 
@@ -130,26 +125,8 @@ impl Storage {
     }
 
     // 轮训获取根目录
-    pub fn get_root_dir(&self) -> anyhow::Result<RootDir> {
-        self.rrw_root_dirs.lock().next().context("not found root_dir")?
-    }
-
-
-
-
-    pub fn upload_file(&self, name: &String) -> anyhow::Result<String> {
-        let dir = inset_dir_by_key(name)?;
-        std::fs::rename(format!("{}/{}", self.tmp_dir, name), &dir).context("rename")?;
-        Ok(format!("{}/{}", dir, name))
-    }
-    // pjw hash
-
-
-    // 根据key 时间戳 文件目录 生成文件名
-    pub fn file_by_key(&self, key: &String, timestamp: u64) -> anyhow::Result<String> {
-        let dir = inset_dir_by_key(key)?;
-        let file = format!("{}/{}_{}", dir, timestamp, key);
-        Ok(file)
+    pub async fn get_root_dir(&self) -> anyhow::Result<RootDir> {
+        Ok(self.rrw_root_dirs.lock().await.next().context("rrw next")?)
     }
 }
 
