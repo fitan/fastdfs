@@ -11,7 +11,7 @@ use hex::ToHex;
 use tokio::io::split;
 use tokio::sync::Mutex;
 use crate::wrr::{Weight, WeightedRoundRobin};
-use crate::next_file::NextFile;
+use crate::next_file::SumSizeFile;
 
 
 pub struct Storage {
@@ -51,7 +51,7 @@ struct RootDir {
     // 当前目录大小
     dir_size: Mutex<u64>,
     // 当前目录大小统计文件
-    next_file: NextFile,
+    next_file: SumSizeFile,
     // 权重大小
     weight: usize,
 }
@@ -65,7 +65,7 @@ impl Weight for RootDir {
 impl RootDir {
     pub fn new(name: String, dir: String, read_write: bool,max_disk_size: u64) -> anyhow::Result<RootDir> {
         let current_dir_size_file_path= format!("{}/current_dir_size.txt", dir);
-        let next_file = NextFile::new(&current_dir_size_file_path).context("NextFile::new")?;
+        let next_file = SumSizeFile::new(&current_dir_size_file_path).context("NextFile::new")?;
         Ok(RootDir {
             name,
             dir,
