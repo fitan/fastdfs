@@ -1,3 +1,6 @@
+use std::rc::Rc;
+use std::sync::Arc;
+
 // 加权轮询算法
 pub struct WeightedRoundRobin<T: Weight> {
     // 当前权重
@@ -9,7 +12,7 @@ pub struct WeightedRoundRobin<T: Weight> {
     // 当前下标
     current_index: usize,
     // 服务列表
-    servers: Vec<T>,
+    servers: Vec<Arc<T>>,
 }
 
 pub trait Weight {
@@ -17,14 +20,14 @@ pub trait Weight {
 }
 
 impl<T: Weight> WeightedRoundRobin<T> {
-    pub fn new(servers: Vec<T>) -> WeightedRoundRobin<T> {
+    pub fn new(servers: Vec<Arc<T>>) -> WeightedRoundRobin<T> {
         let mut max_weight = 0;
         let mut gcd_weight = 0;
         for server in &servers {
-            if server.weight > max_weight {
-                max_weight = server.weight;
+            if server.weight() > max_weight {
+                max_weight = server.weight();
             }
-            gcd_weight = gcd(gcd_weight, server.weight);
+            gcd_weight = gcd(gcd_weight, server.weight());
         }
         WeightedRoundRobin {
             current_weight: 0,
@@ -35,7 +38,7 @@ impl<T: Weight> WeightedRoundRobin<T> {
         }
     }
 
-    pub fn next(&mut self) -> Option<T> {
+    pub fn next(&mut self) -> Option<Arc<T>> {
         loop {
             self.current_index = (self.current_index + 1) % self.servers.len();
             if self.current_index == 0 {
@@ -47,8 +50,8 @@ impl<T: Weight> WeightedRoundRobin<T> {
                     }
                 }
             }
-            if self.servers[self.current_index].weight >= self.current_weight {
-                return Some(self.servers[self.current_index])
+            if self.servers[self.current_index].weight() >= self.current_weight {
+                return Some(Arc::clone(&self.servers[self.current_index]))
             }
         }
     }

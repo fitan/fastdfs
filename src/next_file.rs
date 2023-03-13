@@ -32,13 +32,15 @@ impl SumSizeFile {
     // 插入value
     pub async fn inset(&mut self, value: u64) -> anyhow::Result<()> {
         let _ = self.lock.lock().await;
+        println!("inset value: {}, {:?}", value, value.to_be_bytes());
+        self.inset_file.write_all(&value.to_be_bytes()).context("write_all")?;
 
-        let mut buffer = [0u8; 8];
-        let mut cursor = Cursor::new(&mut buffer[..]);
-        cursor.write_u64(value).await.context("write_u64")?;
-        let _ = self.lock.lock().await;
-
-        self.inset_file.write(&buffer).context("write")?;
+        // let mut buffer = [0u8; 8];
+        // let mut cursor = Cursor::new(&mut buffer[..]);
+        // cursor.write_u64(value).await.context("write_u64")?;
+        // let _ = self.lock.lock().await;
+        //
+        // self.inset_file.write(&buffer).context("write")?;
         self.sum = self.sum + value;
         Ok(())
     }
@@ -78,5 +80,36 @@ impl SumSizeFile {
         write_file.write_u64(sum).await.context("write_u64")?;
         write_file.sync_all().await.context("sync_all")?;
         Ok(())
+    }
+}
+
+
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Context;
+    use crate::next_file::SumSizeFile;
+
+    #[tokio::test]
+    async fn it_works() {
+        use super::*;
+        let mut next_file = SumSizeFile::new("./next_file.txt".to_string()).await.unwrap();
+        next_file.inset("123".len() as u64).await.unwrap();
+        next_file.inset("456".len() as u64).await.unwrap();
+        next_file.inset("789".len() as u64).await.unwrap();
+
+        let mut file = File::open("./next_file.txt".to_string()).unwrap();
+        let mut buffer = [0u8; 8];
+        loop {
+            match file.read_exact(&mut buffer) {
+                Ok(_) => {
+                    println!("read: {}", u64::from_be_bytes(buffer));
+                }
+                Err(e) => {
+                    println!("read error: {}", e);
+                    break;
+                }
+            }
+        }
     }
 }

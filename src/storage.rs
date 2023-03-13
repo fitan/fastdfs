@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Bytes, Read, Write};
 use std::path::Path;
+use std::sync::Arc;
 use anyhow::Context;
 use std::time::{SystemTime, UNIX_EPOCH};
 use axum::extract::Multipart;
@@ -63,9 +64,9 @@ impl Weight for RootDir {
 }
 
 impl RootDir {
-    pub fn new(name: String, dir: String, read_write: bool,max_disk_size: u64) -> anyhow::Result<RootDir> {
+    pub async fn new(name: String, dir: String, read_write: bool,max_disk_size: u64) -> anyhow::Result<RootDir> {
         let current_dir_size_file_path= format!("{}/current_dir_size.txt", dir);
-        let next_file = SumSizeFile::new(&current_dir_size_file_path).context("NextFile::new")?;
+        let next_file = SumSizeFile::new(current_dir_size_file_path).await.context("SumSizeFile::new")?;
         Ok(RootDir {
             name,
             dir,
@@ -125,7 +126,7 @@ impl Storage {
     }
 
     // 轮训获取根目录
-    pub async fn get_root_dir(&self) -> anyhow::Result<RootDir> {
+    pub async fn get_root_dir(&self) -> anyhow::Result<Arc<RootDir>> {
         Ok(self.rrw_root_dirs.lock().await.next().context("rrw next")?)
     }
 }
