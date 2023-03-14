@@ -73,11 +73,11 @@ impl SumSizeFile {
             if read_len == 0 {
                 break;
             }
-            sum += u64::from_le_bytes(buffer);
+            sum += u64::from_be_bytes(buffer);
         }
         self.sum = sum;
         let mut write_file = fs::OpenOptions::new().write(true).truncate(true).open(&self.path).await.context("open")?;
-        write_file.write_u64(sum).await.context("write_u64")?;
+        write_file.write_all(&self.sum.to_be_bytes()).await.context("write_u64")?;
         write_file.sync_all().await.context("sync_all")?;
         Ok(())
     }
@@ -94,9 +94,9 @@ mod tests {
     async fn it_works() {
         use super::*;
         let mut next_file = SumSizeFile::new("./next_file.txt".to_string()).await.unwrap();
-        next_file.inset("123".len() as u64).await.unwrap();
-        next_file.inset("456".len() as u64).await.unwrap();
-        next_file.inset("789".len() as u64).await.unwrap();
+        next_file.inset("100".len() as u64).await.unwrap();
+        next_file.inset("100".len() as u64).await.unwrap();
+        next_file.inset("100".len() as u64).await.unwrap();
 
         let mut file = File::open("./next_file.txt".to_string()).unwrap();
         let mut buffer = [0u8; 8];
@@ -111,5 +111,20 @@ mod tests {
                 }
             }
         }
+
+        next_file.sum().await.unwrap();
+        let mut file = File::open("./next_file.txt".to_string()).unwrap();
+        loop {
+            match file.read_exact(&mut buffer) {
+                Ok(_) => {
+                    println!("sun read: {}", u64::from_be_bytes(buffer));
+                }
+                Err(e) => {
+                    println!("sun read error: {}", e);
+                    break;
+                }
+            }
+        }
+
     }
 }
