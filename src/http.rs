@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::HeaderMap;
+use axum::Json;
 use axum::response::Response;
 use crate::storage::Storage;
 
@@ -30,4 +31,22 @@ pub async fn file_get(Query(params): Query<HashMap<String, String>>, State(stora
     }
     headers.insert("status", "200".parse().unwrap());
     (headers, file.unwrap())
+}
+
+#[derive(Debug,serde::Deserialize,serde::Serialize)]
+pub struct RootDirSizeResponse {
+    root_name: String,
+    size: u64,
+}
+
+pub async fn root_dir_size(State(storage): State<Arc<Storage>>) -> Json<Vec<RootDirSizeResponse>> {
+    let mut root_dir_size_response = Vec::new();
+
+    for root_dir in &storage.root_dirs {
+        root_dir_size_response.append(&mut vec![RootDirSizeResponse {
+            root_name: root_dir.name.clone(),
+            size: root_dir.next_file.get_cursor().await,
+        }]);
+    }
+    Json(root_dir_size_response)
 }

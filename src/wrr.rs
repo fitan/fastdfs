@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -12,7 +13,7 @@ pub struct WeightedRoundRobin<T: Weight> {
     // 当前下标
     current_index: i32,
     // 服务列表
-    servers: Vec<Arc<T>>,
+    servers: Vec<Arc<RefCell<T>>>,
 }
 
 pub trait Weight {
@@ -20,7 +21,7 @@ pub trait Weight {
 }
 
 impl<T: Weight> WeightedRoundRobin<T> {
-    pub fn new(servers: Vec<Arc<T>>) -> WeightedRoundRobin<T> {
+    pub fn new(servers: Vec<Arc<RefCell<T>>>) -> WeightedRoundRobin<T> {
         let mut max_weight = 0;
         let mut gcd_weight = 0;
         for server in &servers {
@@ -38,7 +39,7 @@ impl<T: Weight> WeightedRoundRobin<T> {
         }
     }
 
-    pub fn next(&mut self) -> Option<Arc<T>> {
+    pub fn next(&mut self) -> Option<Arc<RefCell<T>>> {
         loop {
             self.current_index = (self.current_index + 1) % (self.servers.len() as i32);
             if self.current_index == 0 {
@@ -50,7 +51,7 @@ impl<T: Weight> WeightedRoundRobin<T> {
                     }
                 }
             }
-            if self.servers[self.current_index as usize].weight() >= self.current_weight {
+            if self.servers[self.current_index as usize].borrow().weight() >= self.current_weight {
                 return Some(Arc::clone(&self.servers[self.current_index as usize]))
             }
         }

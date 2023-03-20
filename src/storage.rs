@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Bytes, Read, Write};
@@ -17,44 +18,44 @@ use crate::next_file::SumSizeFile;
 
 pub struct Storage {
     // 本地ip
-    local_ip: String,
+    pub local_ip: String,
     // 组名
-    group_name: String,
+    pub group_name: String,
 
     // 目录数量
-    dir_count: u8,
+    pub dir_count: u8,
     // 根目录列表
-    root_dirs: Vec<RootDir>,
+    pub root_dirs: Vec<RootDir>,
 
-    root_dirs_map: HashMap<String, RootDir>,
+    pub root_dirs_map: HashMap<String, RootDir>,
 
     // 根目录磁盘大小
     // 临时目录
-    tmp_dir: String,
+    pub tmp_dir: String,
 
     // 权重获取根目录
-    rrw_root_dirs: Mutex<WeightedRoundRobin<RootDir>>,
+    pub rrw_root_dirs: Mutex<WeightedRoundRobin<RootDir>>,
 
     // hasher
-    hasher: Mutex<Hasher>,
+    pub hasher: Mutex<Hasher>,
 
 }
 
-struct RootDir {
+pub struct RootDir {
     // 名字
-    name: String,
+    pub name: String,
     // 根目录
-    dir: String,
+    pub dir: String,
     // 读写权限
-    read_write: bool,
+    pub read_write: bool,
     // 最大磁盘大小
-    max_disk_size: u64,
+    pub max_disk_size: u64,
     // 当前目录大小
-    dir_size: Mutex<u64>,
+    pub dir_size: Mutex<u64>,
     // 当前目录大小统计文件
-    next_file: SumSizeFile,
+    pub next_file: SumSizeFile,
     // 权重大小
-    weight: i32,
+    pub weight: i32,
 }
 
 impl Weight for RootDir {
@@ -90,7 +91,7 @@ impl Storage {
             root_dirs: vec![RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap()],
             root_dirs_map: HashMap::from_iter(vec![("M00".to_string(), RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap())]),
             tmp_dir: "./tmp".to_string(),
-            rrw_root_dirs: Mutex::new(WeightedRoundRobin::new(vec![Arc::new(RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap())])),
+            rrw_root_dirs: Mutex::new(WeightedRoundRobin::new(vec![Arc::new(RefCell::new(RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap()))])),
             hasher: Mutex::new(Hasher::new()),
         }
     }
@@ -119,7 +120,7 @@ impl Storage {
             let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
             let id = gen_file_id(&self.local_ip, timestamp.to_owned(), data.len() as u64, gen_file_crc32(&data)?).context("gen file id")?;
-            let root_dir = self.get_root_dir().await?;
+            let mut root_dir = self.get_root_dir().await.context("")?.clone().borrow_mut();
             let crc = gen_file_crc32(&data)?;
             let sub_dir = inset_dir_by_key(crc)?;
             let new_file_name = gen_file_name(&self.group_name, &root_dir.name, &sub_dir.to_string(), &id, &suffix_name)?;
@@ -128,12 +129,15 @@ impl Storage {
 
 
             let tmp_file = format!("{}/{}", &self.tmp_dir, &id);
-            tokio::fs::write(&tmp_file, data).await?;
+            tokio::fs::write(&tmp_file, &data).await?;
 
             tracing::info!("save file: {} -> {}", &tmp_file,&real_file_name);
 
             return match tokio::fs::rename(&tmp_file, &real_file_name).await {
-                Ok(_) => Ok(new_file_name),
+                Ok(_) =>{
+                    root_dir.next_file.inset(data.len() as u64);
+                    Ok(new_file_name)
+                }
                 Err(err) => {
                     // 如果文件目录不存在则创建目录
                     if err.kind() == std::io::ErrorKind::NotFound {
@@ -153,7 +157,7 @@ impl Storage {
     }
 
     // 轮训获取根目录
-    pub async fn get_root_dir(&self) -> anyhow::Result<Arc<RootDir>> {
+    pub async fn get_root_dir(&self) -> anyhow::Result<Arc<RefCell<RootDir>>> {
         Ok(self.rrw_root_dirs.lock().await.next().context("rrw next")?)
     }
 }
