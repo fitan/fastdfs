@@ -1,11 +1,12 @@
+use std::collections::HashMap;
 use std::sync::Arc;
-use axum::extract::{Multipart, Path, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use crate::storage::Storage;
 
 // 上传文件
-pub async fn file_upload(mut multipart: Multipart, State(storage): State<Arc<Storage>>) -> String {
+pub async fn file_upload(State(storage): State<Arc<Storage>>, mut multipart: Multipart) -> String {
     let s = storage.clone().save_file(multipart).await;
     if s.is_err() {
         return s.err().unwrap().to_string();
@@ -15,7 +16,10 @@ pub async fn file_upload(mut multipart: Multipart, State(storage): State<Arc<Sto
 
 
 // 下载文件
-pub async fn file_get(Path(name): Path<String>, State(storage): State<Arc<Storage>>) -> (HeaderMap, Vec<u8>) {
+pub async fn file_get(Query(params): Query<HashMap<String, String>>, State(storage): State<Arc<Storage>>) -> (HeaderMap, Vec<u8>) {
+    // let file_name = path.strip_prefix("/file/").unwrap_or(&path).to_string();
+    let name = params.get("name").unwrap().to_string();
+    tracing::info!("file_name: {}", &name);
     let mut headers = HeaderMap::new();
     let mut body = Vec::new();
     let mut file = storage.get_file(&name).await;

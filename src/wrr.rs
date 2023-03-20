@@ -4,19 +4,19 @@ use std::sync::Arc;
 // 加权轮询算法
 pub struct WeightedRoundRobin<T: Weight> {
     // 当前权重
-    current_weight: usize,
+    current_weight: i32,
     // 最大权重
-    max_weight: usize,
+    max_weight: i32,
     // 权重的最大公约数
-    gcd_weight: usize,
+    gcd_weight: i32,
     // 当前下标
-    current_index: usize,
+    current_index: i32,
     // 服务列表
     servers: Vec<Arc<T>>,
 }
 
 pub trait Weight {
-    fn weight(&self) -> usize;
+    fn weight(&self) -> i32;
 }
 
 impl<T: Weight> WeightedRoundRobin<T> {
@@ -40,7 +40,7 @@ impl<T: Weight> WeightedRoundRobin<T> {
 
     pub fn next(&mut self) -> Option<Arc<T>> {
         loop {
-            self.current_index = (self.current_index + 1) % self.servers.len();
+            self.current_index = (self.current_index + 1) % (self.servers.len() as i32);
             if self.current_index == 0 {
                 self.current_weight = self.current_weight - self.gcd_weight;
                 if self.current_weight <= 0 {
@@ -50,14 +50,14 @@ impl<T: Weight> WeightedRoundRobin<T> {
                     }
                 }
             }
-            if self.servers[self.current_index].weight() >= self.current_weight {
-                return Some(Arc::clone(&self.servers[self.current_index]))
+            if self.servers[self.current_index as usize].weight() >= self.current_weight {
+                return Some(Arc::clone(&self.servers[self.current_index as usize]))
             }
         }
     }
 }
 
-fn gcd(a: usize, b: usize) -> usize {
+fn gcd(a: i32, b: i32) -> i32 {
     if b == 0 {
         a
     } else {

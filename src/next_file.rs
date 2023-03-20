@@ -1,9 +1,9 @@
+use std::fs;
 use std::fs::File;
 use std::io::{Read, Cursor, Seek, Write, SeekFrom};
+use std::sync::Mutex;
 use anyhow::Context;
-use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
-use tokio::sync::Mutex;
 
 pub struct SumSizeFile {
     path: String,
@@ -16,7 +16,7 @@ pub struct SumSizeFile {
 }
 
 impl SumSizeFile {
-    pub async fn new(file_name: String) -> anyhow::Result<SumSizeFile> {
+    pub fn new(file_name: String) -> anyhow::Result<SumSizeFile> {
         let inset_file = std::fs::OpenOptions::new().create(true).append(true).open(&file_name).context("open")?;
         let mut sum = SumSizeFile {
             path: file_name,
@@ -25,13 +25,13 @@ impl SumSizeFile {
             lock: Mutex::new(()),
         };
 
-        sum.sum().await?;
+        sum.sum();
         Ok(sum)
     }
 
     // 插入value
     pub async fn inset(&mut self, value: u64) -> anyhow::Result<()> {
-        let _ = self.lock.lock().await;
+        let _ = self.lock.lock();
         println!("inset value: {}, {:?}", value, value.to_be_bytes());
         self.inset_file.write_all(&value.to_be_bytes()).context("write_all")?;
 
@@ -46,7 +46,7 @@ impl SumSizeFile {
     }
 
     pub async fn get_cursor(&self) -> u64 {
-        let _ = self.lock.lock().await;
+        let _ = self.lock.lock();
         self.sum
     }
 
@@ -63,22 +63,22 @@ impl SumSizeFile {
     //     Ok(String::from_utf8(data_buffer)?)
     // }
 
-    pub async fn sum(&mut self) -> anyhow::Result<()> {
-        let _ = self.lock.lock().await;
-        let mut file = fs::OpenOptions::new().read(true).open(&self.path).await.context("open")?;
+    pub fn sum(&mut self) -> anyhow::Result<()> {
+        let _ = self.lock.lock();
+        let mut file = fs::OpenOptions::new().read(true).open(&self.path).context("open")?;
         let mut buffer = [0u8; 8];
         let mut sum = 0;
         loop {
-            let read_len = file.read(&mut buffer).await.context("read")?;
+            let read_len = file.read(&mut buffer).context("read")?;
             if read_len == 0 {
                 break;
             }
             sum += u64::from_be_bytes(buffer);
         }
         self.sum = sum;
-        let mut write_file = fs::OpenOptions::new().write(true).truncate(true).open(&self.path).await.context("open")?;
-        write_file.write_all(&self.sum.to_be_bytes()).await.context("write_u64")?;
-        write_file.sync_all().await.context("sync_all")?;
+        let mut write_file = fs::OpenOptions::new().write(true).truncate(true).open(&self.path).context("open")?;
+        write_file.write_all(&self.sum.to_be_bytes()).context("write_u64")?;
+        write_file.sync_all().context("sync_all")?;
         Ok(())
     }
 }
@@ -93,7 +93,7 @@ mod tests {
     #[tokio::test]
     async fn it_works() {
         use super::*;
-        let mut next_file = SumSizeFile::new("./next_file.txt".to_string()).await.unwrap();
+        let mut next_file = SumSizeFile::new("./next_file.txt".to_string()).unwrap();
         next_file.inset("100".len() as u64).await.unwrap();
         next_file.inset("100".len() as u64).await.unwrap();
         next_file.inset("100".len() as u64).await.unwrap();
@@ -112,7 +112,7 @@ mod tests {
             }
         }
 
-        next_file.sum().await.unwrap();
+        next_file.sum().unwrap();
         let mut file = File::open("./next_file.txt".to_string()).unwrap();
         loop {
             match file.read_exact(&mut buffer) {

@@ -54,19 +54,19 @@ struct RootDir {
     // 当前目录大小统计文件
     next_file: SumSizeFile,
     // 权重大小
-    weight: usize,
+    weight: i32,
 }
 
 impl Weight for RootDir {
-    fn weight(&self) -> usize {
+    fn weight(&self) -> i32 {
         self.weight
     }
 }
 
 impl RootDir {
-    pub async fn new(name: String, dir: String, read_write: bool,max_disk_size: u64) -> anyhow::Result<RootDir> {
+    pub fn new(name: String, dir: String, read_write: bool,max_disk_size: u64) -> anyhow::Result<RootDir> {
         let current_dir_size_file_path= format!("{}/current_dir_size.txt", dir);
-        let next_file = SumSizeFile::new(current_dir_size_file_path).await.context("SumSizeFile::new")?;
+        let next_file = SumSizeFile::new(current_dir_size_file_path).context("SumSizeFile::new")?;
         Ok(RootDir {
             name,
             dir,
@@ -82,14 +82,28 @@ impl RootDir {
 }
 
 impl Storage {
+    pub fn new() -> Storage {
+        Storage{
+            local_ip: "localhost".to_string(),
+            group_name: "group1".to_string(),
+            dir_count: 32,
+            root_dirs: vec![RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap()],
+            root_dirs_map: HashMap::from_iter(vec![("M00".to_string(), RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap())]),
+            tmp_dir: "./tmp".to_string(),
+            rrw_root_dirs: Mutex::new(WeightedRoundRobin::new(vec![Arc::new(RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap())])),
+            hasher: Mutex::new(Hasher::new()),
+        }
+    }
 
     pub async fn get_file(&self, name: &String) -> anyhow::Result<Vec<u8>> {
         let real_file = self.decode_file_name_to_real_file_name(name)?;
+        tracing::info!("real_file: {}", real_file);
         Ok(tokio::fs::read(&real_file).await.context("read")?)
     }
 
     pub fn decode_file_name_to_real_file_name(&self, name: &String) -> anyhow::Result<String> {
         let (_, dir_name, sub_dir_name0, sud_dir_name1, id, file_ext_name) = decode_file_name(name)?;
+        tracing::info!("dir_name: {}, sub_dir_name0: {}, sud_dir_name1: {}, id: {}, file_ext_name: {}", dir_name, sub_dir_name0, sud_dir_name1, id, file_ext_name);
         let root_path = self.root_dirs_map.get(&dir_name).context("not found root_path")?;
         Ok(format!("{}/{}/{}/{}.{}", root_path.dir, sub_dir_name0, sud_dir_name1, id, file_ext_name))
     }
@@ -97,8 +111,6 @@ impl Storage {
 
     // 保存文件
     pub async fn save_file(&self, mut payload: Multipart) -> anyhow::Result<String> {
-        let mut f = std::fs::OpenOptions::new().write(true).create(true).open(&self.tmp_dir).context("open")?;
-
         if let Some(field) = payload.next_field().await? {
             let content_type = field.content_type().context("not found content_type")?.to_string();
             let file_name = field.file_name().context("not found file_name")?.to_string();
@@ -110,16 +122,31 @@ impl Storage {
             let root_dir = self.get_root_dir().await?;
             let crc = gen_file_crc32(&data)?;
             let sub_dir = inset_dir_by_key(crc)?;
-            let new_file_name = gen_file_name(&self.group_name, &root_dir.name, &sub_dir.to_string(), &sub_dir.to_string(), &id)?;
+            let new_file_name = gen_file_name(&self.group_name, &root_dir.name, &sub_dir.to_string(), &id, &suffix_name)?;
             let real_file_name = format!("{}/{}/{}/{}.{}", &root_dir.dir, &sub_dir, &sub_dir, &id, &suffix_name);
+
 
 
             let tmp_file = format!("{}/{}", &self.tmp_dir, &id);
             tokio::fs::write(&tmp_file, data).await?;
 
-            tokio::fs::rename(tmp_file, real_file_name).await?;
+            tracing::info!("save file: {} -> {}", &tmp_file,&real_file_name);
 
-            return Ok(new_file_name)
+            return match tokio::fs::rename(&tmp_file, &real_file_name).await {
+                Ok(_) => Ok(new_file_name),
+                Err(err) => {
+                    // 如果文件目录不存在则创建目录
+                    if err.kind() == std::io::ErrorKind::NotFound {
+                        let dir = Path::new(&real_file_name).parent().context("not found parent")?.to_string_lossy().to_string();
+                        tokio::fs::create_dir_all(dir).await?;
+                        tokio::fs::rename(&tmp_file, &real_file_name).await?;
+                        Ok(new_file_name)
+                    } else {
+                        Err(anyhow::anyhow!("rename file error: {}", err))
+                    }
+                }
+            }
+
         }
 
         Err(anyhow::anyhow!("not found file"))
@@ -172,7 +199,7 @@ fn gen_file_name(group_name: &String, dir_name: &String, sub_dir_name: &String, 
 // 解析文件名
 fn decode_file_name(file_name: &String) -> anyhow::Result<(String, String, String, String, String, String)> {
     let v: Vec<&str> = file_name.split("/").collect();
-    if v.len() != 7 {
+    if v.len() != 6 {
         return Err(anyhow::anyhow!("invalid file name"));
     }
     let group_name = v[0].to_string();
