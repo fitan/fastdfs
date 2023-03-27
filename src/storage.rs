@@ -34,7 +34,7 @@ pub struct Storage {
     pub tmp_dir: String,
 
     // 权重获取根目录
-    pub rrw_root_dirs: Mutex<WeightedRoundRobin<RootDir>>,
+    pub rrw_root_dirs: WeightedRoundRobin<RootDir>,
 
     // hasher
     pub hasher: Mutex<Hasher>,
@@ -91,7 +91,7 @@ impl Storage {
             root_dirs: vec![RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap()],
             root_dirs_map: HashMap::from_iter(vec![("M00".to_string(), RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap())]),
             tmp_dir: "./tmp".to_string(),
-            rrw_root_dirs: Mutex::new(WeightedRoundRobin::new(vec![Arc::new(RefCell::new(RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap()))])),
+            rrw_root_dirs: WeightedRoundRobin::new(vec![RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap()]),
             hasher: Mutex::new(Hasher::new()),
         }
     }
@@ -111,7 +111,7 @@ impl Storage {
 
 
     // 保存文件
-    pub async fn save_file(&self, mut payload: Multipart) -> anyhow::Result<String> {
+    pub async fn save_file(&mut self, mut payload: Multipart) -> anyhow::Result<String> {
         if let Some(field) = payload.next_field().await? {
             let content_type = field.content_type().context("not found content_type")?.to_string();
             let file_name = field.file_name().context("not found file_name")?.to_string();
@@ -120,11 +120,12 @@ impl Storage {
             let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
             let id = gen_file_id(&self.local_ip, timestamp.to_owned(), data.len() as u64, gen_file_crc32(&data)?).context("gen file id")?;
-            let mut root_dir = self.get_root_dir().await.context("")?.clone().borrow_mut();
+            let root_dir_arc = self.rrw_root_dirs.next().await.clone().unwrap();
+            let mut m_root_dir = root_dir_arc.lock().await;
             let crc = gen_file_crc32(&data)?;
             let sub_dir = inset_dir_by_key(crc)?;
-            let new_file_name = gen_file_name(&self.group_name, &root_dir.name, &sub_dir.to_string(), &id, &suffix_name)?;
-            let real_file_name = format!("{}/{}/{}/{}.{}", &root_dir.dir, &sub_dir, &sub_dir, &id, &suffix_name);
+            let new_file_name = gen_file_name(&self.group_name, &m_root_dir.name, &m_root_dir.name, &id, &suffix_name)?;
+            let real_file_name = format!("{}/{}/{}/{}.{}", &m_root_dir.dir, &sub_dir, &sub_dir, &id, &suffix_name);
 
 
 
@@ -135,7 +136,7 @@ impl Storage {
 
             return match tokio::fs::rename(&tmp_file, &real_file_name).await {
                 Ok(_) =>{
-                    root_dir.next_file.inset(data.len() as u64);
+                    m_root_dir.next_file.inset(data.len() as u64).await.unwrap();
                     Ok(new_file_name)
                 }
                 Err(err) => {
@@ -156,10 +157,6 @@ impl Storage {
         Err(anyhow::anyhow!("not found file"))
     }
 
-    // 轮训获取根目录
-    pub async fn get_root_dir(&self) -> anyhow::Result<Arc<RefCell<RootDir>>> {
-        Ok(self.rrw_root_dirs.lock().await.next().context("rrw next")?)
-    }
 }
 
 

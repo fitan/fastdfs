@@ -1,27 +1,28 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc};
+use tokio::sync::Mutex;
 
 // 加权轮询算法
 pub struct WeightedRoundRobin<T: Weight> {
     // 当前权重
-    current_weight: i32,
+    pub current_weight: i32,
     // 最大权重
-    max_weight: i32,
+    pub max_weight: i32,
     // 权重的最大公约数
-    gcd_weight: i32,
+    pub gcd_weight: i32,
     // 当前下标
-    current_index: i32,
+    pub current_index: Arc<Mutex<i32>>,
     // 服务列表
-    servers: Vec<Arc<RefCell<T>>>,
+    pub servers: Vec<Arc<Mutex<T>>>,
 }
 
 pub trait Weight {
     fn weight(&self) -> i32;
 }
 
-impl<T: Weight> WeightedRoundRobin<T> {
-    pub fn new(servers: Vec<Arc<RefCell<T>>>) -> WeightedRoundRobin<T> {
+impl<T: Weight + Send> WeightedRoundRobin<T> {
+    pub fn new(servers: Vec<T>) -> WeightedRoundRobin<T> {
         let mut max_weight = 0;
         let mut gcd_weight = 0;
         for server in &servers {
@@ -34,15 +35,16 @@ impl<T: Weight> WeightedRoundRobin<T> {
             current_weight: 0,
             max_weight,
             gcd_weight,
-            current_index: 0,
-            servers,
+            current_index: Arc::new(Mutex::new(0)),
+            servers: servers.into_iter().map(|server| Arc::new(Mutex::new(server))).collect()
         }
     }
-
-    pub fn next(&mut self) -> Option<Arc<RefCell<T>>> {
+    
+    pub async fn next(&mut self) -> Option<Arc<Mutex<T>>> {
         loop {
-            self.current_index = (self.current_index + 1) % (self.servers.len() as i32);
-            if self.current_index == 0 {
+            let mut current_index = self.current_index.lock().await;
+            *current_index = (*current_index + 1) % (self.servers.len() as i32);
+            if *current_index == 0 {
                 self.current_weight = self.current_weight - self.gcd_weight;
                 if self.current_weight <= 0 {
                     self.current_weight = self.max_weight;
@@ -51,8 +53,8 @@ impl<T: Weight> WeightedRoundRobin<T> {
                     }
                 }
             }
-            if self.servers[self.current_index as usize].borrow().weight() >= self.current_weight {
-                return Some(Arc::clone(&self.servers[self.current_index as usize]))
+            if self.servers[*current_index as usize].clone().lock().await.weight() >= self.current_weight {
+                return Some(self.servers[*current_index as usize].clone())
             }
         }
     }
