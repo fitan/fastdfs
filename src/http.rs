@@ -44,10 +44,10 @@ pub struct RootDirSizeResponse {
 pub async fn root_dir_size(State(storage): State<Arc<Mutex<Storage>>>) -> Json<Vec<RootDirSizeResponse>> {
     let mut root_dir_size_response = Vec::new();
 
-    for root_dir in &storage.clone().lock().await.root_dirs {
+    for root_dir in &storage.clone().lock().await.root_dirs_map {
         root_dir_size_response.append(&mut vec![RootDirSizeResponse {
-            root_name: root_dir.name.clone(),
-            size: root_dir.next_file.get_cursor().await,
+            root_name: root_dir.0.to_string(),
+            size: root_dir.1.clone().lock().await.next_file.get_cursor().await
         }]);
     }
     Json(root_dir_size_response)

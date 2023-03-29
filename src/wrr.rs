@@ -22,21 +22,22 @@ pub trait Weight {
 }
 
 impl<T: Weight + Send> WeightedRoundRobin<T> {
-    pub fn new(servers: Vec<T>) -> WeightedRoundRobin<T> {
+    pub async fn new(servers: Vec<Arc<Mutex<T>>>) -> WeightedRoundRobin<T> {
         let mut max_weight = 0;
         let mut gcd_weight = 0;
         for server in &servers {
-            if server.weight() > max_weight {
-                max_weight = server.weight();
+            let weight = server.clone().lock().await.weight();
+            if weight > max_weight {
+                max_weight = weight;
             }
-            gcd_weight = gcd(gcd_weight, server.weight());
+            gcd_weight = gcd(gcd_weight, weight);
         }
         WeightedRoundRobin {
             current_weight: 0,
             max_weight,
             gcd_weight,
             current_index: Arc::new(Mutex::new(0)),
-            servers: servers.into_iter().map(|server| Arc::new(Mutex::new(server))).collect()
+            servers,
         }
     }
     

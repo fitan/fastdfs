@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Bytes, Read, Write};
+
 use std::path::Path;
 use std::sync::Arc;
 use anyhow::Context;
@@ -11,9 +12,11 @@ use base64::{Engine as _, engine::{self, general_purpose}, alphabet};
 use crc32fast::Hasher;
 use hex::ToHex;
 use tokio::io::split;
+use tokio::stream;
 use tokio::sync::Mutex;
 use crate::wrr::{Weight, WeightedRoundRobin};
 use crate::next_file::SumSizeFile;
+use futures::executor::block_on;
 
 
 pub struct Storage {
@@ -24,10 +27,8 @@ pub struct Storage {
 
     // 目录数量
     pub dir_count: u8,
-    // 根目录列表
-    pub root_dirs: Vec<RootDir>,
 
-    pub root_dirs_map: HashMap<String, RootDir>,
+    pub root_dirs_map: HashMap<String, Arc<Mutex<RootDir>>>,
 
     // 根目录磁盘大小
     // 临时目录
@@ -83,30 +84,36 @@ impl RootDir {
 }
 
 impl Storage {
-    pub fn new() -> Storage {
+    pub async fn new(root_dir_vec: Vec<Arc<Mutex<RootDir>>>) -> Storage {
+        let mut root_dirs_map = HashMap::new();
+        for root_dir in root_dir_vec.iter() {
+            let root_dir_arc = root_dir.clone();
+            root_dirs_map.insert(root_dir.clone().lock().await.name.to_string(), root_dir_arc);
+        }
+
         Storage{
             local_ip: "localhost".to_string(),
             group_name: "group1".to_string(),
             dir_count: 32,
-            root_dirs: vec![RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap()],
-            root_dirs_map: HashMap::from_iter(vec![("M00".to_string(), RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap())]),
+            // root_dirs: vec![RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap()],
+            root_dirs_map,
             tmp_dir: "./tmp".to_string(),
-            rrw_root_dirs: WeightedRoundRobin::new(vec![RootDir::new("M00".to_string(), "./data".to_string(), true, 1024 * 1024 * 1024 * 1024).unwrap()]),
+            rrw_root_dirs: WeightedRoundRobin::new(root_dir_vec.iter().map(|v| v.clone()).collect()).await,
             hasher: Mutex::new(Hasher::new()),
         }
     }
 
     pub async fn get_file(&self, name: &String) -> anyhow::Result<Vec<u8>> {
-        let real_file = self.decode_file_name_to_real_file_name(name)?;
+        let real_file = self.decode_file_name_to_real_file_name(name).await?;
         tracing::info!("real_file: {}", real_file);
         Ok(tokio::fs::read(&real_file).await.context("read")?)
     }
 
-    pub fn decode_file_name_to_real_file_name(&self, name: &String) -> anyhow::Result<String> {
+    pub async fn decode_file_name_to_real_file_name(&self, name: &String) -> anyhow::Result<String> {
         let (_, dir_name, sub_dir_name0, sud_dir_name1, id, file_ext_name) = decode_file_name(name)?;
         tracing::info!("dir_name: {}, sub_dir_name0: {}, sud_dir_name1: {}, id: {}, file_ext_name: {}", dir_name, sub_dir_name0, sud_dir_name1, id, file_ext_name);
         let root_path = self.root_dirs_map.get(&dir_name).context("not found root_path")?;
-        Ok(format!("{}/{}/{}/{}.{}", root_path.dir, sub_dir_name0, sud_dir_name1, id, file_ext_name))
+        Ok(format!("{}/{}/{}/{}.{}", root_path.lock().await.dir, sub_dir_name0, sud_dir_name1, id, file_ext_name))
     }
 
 
@@ -124,7 +131,7 @@ impl Storage {
             let mut m_root_dir = root_dir_arc.lock().await;
             let crc = gen_file_crc32(&data)?;
             let sub_dir = inset_dir_by_key(crc)?;
-            let new_file_name = gen_file_name(&self.group_name, &m_root_dir.name, &m_root_dir.name, &id, &suffix_name)?;
+            let new_file_name = gen_file_name(&self.group_name, &m_root_dir.name, &sub_dir.to_string(), &id, &suffix_name)?;
             let real_file_name = format!("{}/{}/{}/{}.{}", &m_root_dir.dir, &sub_dir, &sub_dir, &id, &suffix_name);
 
 
@@ -145,6 +152,7 @@ impl Storage {
                         let dir = Path::new(&real_file_name).parent().context("not found parent")?.to_string_lossy().to_string();
                         tokio::fs::create_dir_all(dir).await?;
                         tokio::fs::rename(&tmp_file, &real_file_name).await?;
+                        m_root_dir.next_file.inset(data.len() as u64).await.unwrap();
                         Ok(new_file_name)
                     } else {
                         Err(anyhow::anyhow!("rename file error: {}", err))

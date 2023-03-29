@@ -42,11 +42,13 @@ impl SumSizeFile {
         //
         // self.inset_file.write(&buffer).context("write")?;
         self.sum = self.sum + value;
+        tracing::info!("sum: {}", &self.sum);
         Ok(())
     }
 
     pub async fn get_cursor(&self) -> u64 {
         let _ = self.lock.lock();
+        tracing::info!("get_cursor: {}", &self.sum);
         self.sum
     }
 
