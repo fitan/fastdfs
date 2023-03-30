@@ -2,6 +2,7 @@ mod http;
 mod storage;
 mod wrr;
 mod next_file;
+mod binlog;
 
 extern crate core;
 
